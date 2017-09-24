@@ -15,7 +15,7 @@
 ! LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 ! OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 ! SOFTWARE.
-      
+
       module bmif
       use, intrinsic :: iso_c_binding, only: c_ptr, c_loc, c_f_pointer
       
@@ -48,6 +48,8 @@
 		real*8 :: frz_frn_max,frz_frn_min                      ! freezing front min and max depth [meters]
 		real*8 :: sat_coef                                     ! saturation coefficient [dimensionless, fraction of 1]
 		real*8 :: sea_level                                    ! how many meter above the sea level the borehole is
+		integer :: cur_time                                      ! number of time steps that temp will be averaged over
+
   
 		character*64 :: file_sites,file_bound,file_snow,file_rsnow,file_init
 		character*64 :: file_grid,file_organic,file_mineral
@@ -127,18 +129,25 @@
       character (len=component_name_length), target :: &
         component_name = "gipl model PermaModel component"
 
+      
       ! start exchange item list
-      integer, parameter :: input_item_count = 1
-      integer, parameter :: output_item_count = 1
+      integer, parameter :: input_item_count = 3
+      integer, parameter :: output_item_count = 3
       integer, parameter :: item_name_length = 22
       character (len=item_name_length), target, &
         dimension (input_item_count) :: &
-        input_items = (/'air_temp    '/)
+        input_items = (/'air__temperature',  	& ! utemp_i(:,i_site)
+        				'snow__depth     ', 	& ! snd_i(:,i_site)
+        				'snow__density   '		& ! stcon_i(:,i_site)
+        /)
 
       character (len=item_name_length), target, &
-        dimension (output_item_count) :: &
-        output_items = (/'ground_temps   '/)
+        dimension (output_item_count) :: output_items = &
+        (/ 'soil__temperatures  ',  &  ! temp(:,:)
+           '1D_vertical_grid    ', &   ! grid()
+           'soil__thaw_depth    ' /)
       ! end exchange item list
+      
 
       contains
           subroutine BMI_Initialize (self, config_file)
@@ -159,6 +168,7 @@
             call interpolate_ic(self)
             call interpolate_temp_snd(self)
             call open_res_files(self)
+            self%cur_time=0
 
           end subroutine BMI_Initialize
           
@@ -664,13 +674,8 @@
 			open(2,file=self%aver_res_file,STATUS='unknown')
 			open(3,file=self%restart_file,STATUS='unknown')
 			write(self%FMT1,'(A30,I0,A12)')'(1x,I10,1x,F12.3,2(1x,F16.12),',self%m_grd,'(1x,F16.12))'
-			write(FMT11,'(A34,I0,A12)')'(7x,A4,1x,A10,2(3x,A10),',self%m_grd,'(1x,F16.4))'
-			write(1,FMT11) 'id','day','bnd_temp','snd', (self%zdepth(self%zdepth_id(i)),i=1,self%m_grd)
-			
 			write(self%FMT2,'(A28,I0,A40)')'(1x,I10,1x,F12.3,2(1x,F8.3),',self%m_grd,'(1x,F8.3),(1x,F8.3,1x,F12.3),(1x,F12.3))'
-			write(FMT22,'(A34,I0,A20,A12)')'(7x,A4,1x,A10,2(3x,A10),',self%m_grd,'(1x,F8.3),3(A12))'
-			write(2,FMT22) 'id','day','bnd_temp','snd', (self%zdepth(self%zdepth_id(i)),i=1,self%m_grd),&
-							'alt','frz_up_cur','frz_up_tot'
+
 		end subroutine open_res_files
 
 		subroutine active_layer(self,k)
@@ -830,10 +835,10 @@
 
           end subroutine BMI_Finalize
 
-          subroutine BMI_Update (self)
-            implicit none
-            type (BMI_Model), intent (inout) :: self
-            ! variables
+        subroutine BMI_Update (self)
+          implicit none
+          type (BMI_Model), intent (inout) :: self
+                    ! variables
 			real*8 :: res_save(self%m_grd+3,self%n_site)               ! save results into 2D array
 			real*8 :: dfrz_frn(self%n_time)                       ! depth of the freezing front
 			real :: frz_up_time_cur                          ! freezeup time current (within a year)
@@ -842,33 +847,45 @@
 			real*8 :: time_s,time_e                          ! internal start and end times
 			real*8 :: time_loop                      		 ! main looping time
 			real*8 :: time_cur                     			 ! current time (e.g. current day)
-			integer :: i_site,j_time,i_grd,i_lay
+			integer :: i_site,j_time,i_grd,i_lay,i
     
 			time_s=self%time_step*DBLE(self%n_time*self%time_beg)
 			time_e=self%time_step*DBLE(self%n_time*self%time_end)
 			self%i_time=1
-			self%TINIR=0.0D0 
-			time_loop=0.0D0
+			self%TINIR=self%cur_time 
+			time_loop=self%cur_time
+			!time_e=time_loop+1
+			!write(*,*)'restart_time:',self%time_restart,'time_e:',time_e,'n_time:',self%n_time
 			
-			do while (time_loop.LT.time_e)
+			!do while (time_loop.LT.time_e)
+			!write(*,*)'inside the while loop'
 				do i_site=1,self%n_site
 					time_cur=time_loop+self%time_restart
+					!write(*,*)'time_cur',time_cur
 					call save_results(self,i_site,time_cur,time_loop)
-					6666  continue
+					
+					!6666  continue
+					write(*,*)'running stefan...'
 					call stefan1D(self,i_site,time_loop)
 					time_loop=time_loop+self%time_step
 					time_cur=time_loop+self%time_restart
+					!write(*,*)'loop,cur:', time_loop, time_cur
 				
-					if(self%i_time(i_site).LT.self%n_time)  then
+					!if(self%i_time(i_site).LT.self%n_time)  then
+					!if(self%i_time(i_site).LT.2)  then
+					    !write(*,*)'itime,ntime:',self%i_time(i_site), self%n_time
 						self%i_time(i_site)=self%i_time(i_site)+1
+						print*, 'before save:',i_site,time_cur,time_loop
 						call save_results(self,i_site,time_cur,time_loop)
 						call active_layer(self,i_site)
-						GOTO 6666
-					endif
-				
+					!	GOTO 6666
+					!endif
+				print*,'time_s,time_e,time_loop,time_s',time_s,time_e,time_loop,time_s
 					if(time_s.LT.time_e.AND.time_loop.GT.time_s)then
+					    print*,'ok'
 						do j_time=1,self%n_time			! WRITTING RESULTS
 							write(1,self%FMT1) i_site, (self%RES(j_time,i_grd),i_grd=1,self%m_grd+3)
+							!write(*,self%FMT1) i_site, (self%RES(j_time,i_grd),i_grd=1,self%m_grd+3)
 						enddo
 					endif
 					do i_grd=1,self%m_grd+3
@@ -912,9 +929,13 @@
 				enddo
 				call save_restart(self)
 				self%TINIR=time_loop
-			enddo
+				
+				write(*,*)'time_cur,time_loop:',time_cur,time_loop
+				self%cur_time=self%cur_time+1
+	
+			!enddo
 		
-          end subroutine BMI_Update
+        end subroutine BMI_Update
 
 
 
@@ -1278,20 +1299,96 @@
 		end subroutine filexist
 		!-----------------------------------------------
 
-        subroutine BMI_Update_until (self, t)
+        subroutine BMI_Update_until (self)
             implicit none
             type (BMI_Model), intent (inout) :: self
-            real, intent (in) :: t
-            ! end declaration section
+            ! variables
+			real*8 :: res_save(self%m_grd+3,self%n_site)               ! save results into 2D array
+			real*8 :: dfrz_frn(self%n_time)                       ! depth of the freezing front
+			real :: frz_up_time_cur                          ! freezeup time current (within a year)
+			real :: frz_up_time_tot                          ! freezeup time global
+			! counters (time,steps)
+			real*8 :: time_s,time_e                          ! internal start and end times
+			real*8 :: time_loop                      		 ! main looping time
+			real*8 :: time_cur                     			 ! current time (e.g. current day)
+			integer :: i_site,j_time,i_grd,i_lay
+    
+			time_s=self%time_step*DBLE(self%n_time*self%time_beg)
+			time_e=self%time_step*DBLE(self%n_time*self%time_end)
+			self%i_time=1
+			self%TINIR=0.0D0 
+			time_loop=0.0D0
+			
+			do while (time_loop.LT.time_e)
+				do i_site=1,self%n_site
+					time_cur=time_loop+self%time_restart
+					call save_results(self,i_site,time_cur,time_loop)
+					6666  continue
+					call stefan1D(self,i_site,time_loop)
+					time_loop=time_loop+self%time_step
+					time_cur=time_loop+self%time_restart
+				
+					if(self%i_time(i_site).LT.self%n_time)  then
+						self%i_time(i_site)=self%i_time(i_site)+1
+						call save_results(self,i_site,time_cur,time_loop)
+						call active_layer(self,i_site)
+						GOTO 6666
+					endif
+				
+					if(time_s.LT.time_e.AND.time_loop.GT.time_s)then
+						do j_time=1,self%n_time			! WRITTING RESULTS
+							write(1,self%FMT1) i_site, (self%RES(j_time,i_grd),i_grd=1,self%m_grd+3)
+						enddo
+					endif
+					do i_grd=1,self%m_grd+3
+						res_save(i_grd,i_site)=sum((self%RES(:,i_grd)))
+					enddo
+				enddo
 
-			print*, 'Nothing here'
+				self%i_time=1
+				do i_site=1,self%n_site
+					frz_up_time_cur=-7777.D0
+					frz_up_time_tot=frz_up_time_cur
+					do j_time=2,self%n_time
+						if((self%n_frz_frn(j_time,i_site)-self%n_frz_frn(j_time-1,i_site)).EQ.-2)then
+							if(self%z_frz_frn(j_time-1,self%n_frz_frn(j_time-1,i_site),i_site).GE.self%frz_frn_min) &
+								frz_up_time_cur=SNGL(self%RES(j_time,1))
+						endif
+					enddo
+
+					if(frz_up_time_cur.GT.0.0)then
+						frz_up_time_tot=AMOD(frz_up_time_cur,REAL(self%n_time))
+						if(frz_up_time_tot.EQ.0.0)frz_up_time_tot=REAL(self%n_time)
+					endif
+					dfrz_frn=self%z_frz_frn(:,1,i_site)
+		
+					call save_results(self,i_site,time_cur,time_loop)
+					call active_layer(self,i_site)
+
+					!____WRITTING MEAN
+					write(2,self%FMT2) i_site,(res_save(i_grd,i_site)/DBLE(self%n_time),i_grd=1,self%m_grd+3), &
+								   dfrz_frn(self%n_time),frz_up_time_cur,frz_up_time_tot
+					do j_time=1,self%n_time+2
+						self%utemp_time_i(j_time)=time_cur+DBLE(j_time-1)*self%time_step
+					enddo
+					call interpolate(self%utemp_time,self%utemp(:,i_site),self%n_temp,&
+									self%utemp_time_i,self%utemp_i(:,i_site),self%n_time+2)
+					call interpolate(self%snd_time,self%snd(:,i_site),self%n_snow, &
+									self%utemp_time_i,self%snd_i(:,i_site),self%n_time+2)
+					call snowfix(self%utemp_i(:,i_site),self%snd_i(:,i_site),self%n_time+2)
+					call interpolate(self%stcon_time,self%stcon(:,i_site),self%n_stcon,&
+											self%utemp_time_i,self%stcon_i(:,i_site),self%n_time+2)
+				enddo
+				call save_restart(self)
+				self%TINIR=time_loop
+			enddo
 			
         end subroutine BMI_Update_until
         
 
-        subroutine BMI_Get_start_time (self, t_start)
+                subroutine BMI_Get_start_time (self, t_start)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             real, intent (out) :: t_start
             ! end declaration BMI_Get_start_time
 
@@ -1300,7 +1397,7 @@
 
         subroutine BMI_Get_end_time (self, t_end)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             real, intent (out) :: t_end
             ! end declaration BMI_Get_end_time
 
@@ -1309,34 +1406,37 @@
 
         subroutine BMI_Get_current_time (self, time)
             implicit none
-            type (BMI_Model), intent (inout) :: self
-            real, intent (out) :: time
+            type (BMI_model), intent (inout) :: self
+            integer, intent (out) :: time
             ! end declaration BMI_Get_current_time
 
-            time = self%t
+            time = self%cur_time
         end subroutine BMI_Get_current_time
 
           subroutine BMI_Get_time_step (self, dt)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             real, intent (out) :: dt
             ! end declaration section
 
-            dt = self%dt
+            dt = self%time_step
           end subroutine BMI_Get_time_step
 
           subroutine BMI_Get_time_units (self, units)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (out) :: units
             ! end declaration section
-
-            units = "-"
+			if (self%time_step==1) then 
+				units = "days"
+			else 
+				units = "--"
+			endif
           end subroutine BMI_Get_time_units
 
           subroutine BMI_Get_var_type (self, var_name, type)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (in) :: var_name
             integer, intent (out) :: type
             ! end declaration section
@@ -1346,17 +1446,29 @@
 
           subroutine BMI_Get_var_units (self, var_name, units)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (in) :: var_name
             character (len=*), intent (out) :: units
             ! end declaration section
-
-            units = "meter"
+            
+            select case (var_name)
+            case ('snow__density     ')
+               units = "kg/m3"
+            case ('snow__depth     ')
+			   units = "m"
+			case ('soil__thaw_depth  ')
+			   units = "m"
+			case ('soil__temperatures  ')
+			   units = "degree C"
+			case default
+			   units = "--"
+			end select
+						
           end subroutine BMI_Get_var_units
 
           subroutine BMI_Get_var_rank (self, var_name, rank)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (in) :: var_name
             integer, intent (out) :: rank
             ! end declaration section
@@ -1366,27 +1478,41 @@
 
           subroutine BMI_Get_grid_type (self, var_name, type)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (in) :: var_name
             integer, intent (out) :: type
             ! end declaration section
 
             type = BMI_GRID_TYPE_UNSTRUCTURED
           end subroutine BMI_Get_grid_type
+          
+		  ! Get the grid identifier for the given variable.
+		  subroutine  BMI_get_var_grid(self, var_name, grid_id) 
+			implicit none
+			type (BMI_model), intent (in) :: self
+			character (len=*), intent (in) :: var_name
+			integer, intent (out) :: grid_id
+			
+			if (var_name == output_items(2)) then
+			   grid_id = -1  ! only alt has dim 1 
+			else
+			   grid_id = 0   ! success
+			end if
+		  end subroutine BMI_get_var_grid
 
-          subroutine BMI_Get_grid_shape (self, var_name, shape)
+          subroutine BMI_Get_grid_shape (self, grid_id, shape)
             implicit none
-            type (BMI_Model), intent (inout) :: self
-            character (len=*), intent (in) :: var_name
+            type (BMI_model), intent (inout) :: self
+            integer, intent (in) :: grid_id
             integer, dimension (:), intent (out) :: shape
             ! end declaration section
-
-            shape(1) = self%n_grd
+			
+			if (grid_id == 0)shape(1) = self%n_grd
           end subroutine BMI_Get_grid_shape
 
           subroutine BMI_Get_grid_spacing (self, var_name, spacing)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (in) :: var_name
             real, dimension (:), intent (out) :: spacing
             ! end declaration section
@@ -1396,7 +1522,7 @@
 
           subroutine BMI_Get_grid_origin (self, var_name, origin)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (in) :: var_name
             real, dimension (:), intent (out) :: origin
             ! end declaration section
@@ -1406,7 +1532,7 @@
 
           subroutine BMI_Get_double (self, var_name, dest)
             implicit none
-            type (BMI_Model), intent (in) :: self
+            type (BMI_model), intent (in) :: self
             character (len=*), intent (in) :: var_name
             real, pointer, intent (inout) :: dest(:)
             ! end declaration section
@@ -1430,7 +1556,7 @@
 
           subroutine BMI_Get_double_copy (self, var_name, dest)
             implicit none
-            type (BMI_Model), intent (in) :: self
+            type (BMI_model), intent (in) :: self
             character (len=*), intent (in) :: var_name
             real, intent (out) :: dest (*)
             ! end declaration section
@@ -1444,7 +1570,7 @@
 
           subroutine BMI_Get_double_at_indices (self, var_name, dest, inds)
             implicit none
-            type (BMI_Model), intent (in) :: self
+            type (BMI_model), intent (in) :: self
             character (len=*), intent (in) :: var_name
             real, pointer, intent (inout) :: dest(:)
             integer, intent (in) :: inds(:)
@@ -1469,7 +1595,7 @@
 
           subroutine BMI_Set_double (self, var_name, src)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (in) :: var_name
             real, intent (in) :: src (*)
             ! end declaration section
@@ -1480,7 +1606,7 @@
 
           subroutine BMI_Set_double_at_indices (self, var_name, inds, src)
             implicit none
-            type (BMI_Model), intent (inout) :: self
+            type (BMI_model), intent (inout) :: self
             character (len=*), intent (in) :: var_name
             integer, intent (in) :: inds(:)
             real, intent (in) :: src (*)
@@ -1512,7 +1638,7 @@
 
           subroutine BMI_Get_input_var_names (self, names)
             implicit none
-            type (BMI_Model), intent (in) :: self
+            type (BMI_model), intent (in) :: self
             character (*), pointer, intent (out) :: names(:)
             ! end declaration section
 
@@ -1521,7 +1647,7 @@
 
           subroutine BMI_Get_output_var_names (self, names)
             implicit none
-            type (BMI_Model), intent (in) :: self
+            type (BMI_model), intent (in) :: self
             character (*), pointer, intent (out) :: names(:)
             ! end declaration section
 
@@ -1530,12 +1656,95 @@
 
           subroutine BMI_Get_component_name (self, name)
             implicit none
-            type (BMI_Model), intent (in) :: self
+            type (BMI_model), intent (in) :: self
             character (len=*), pointer, intent (out) :: name
             ! end declaration section
 
             name => component_name
           end subroutine BMI_Get_component_name
+          
+		 subroutine BMI_get_value(self, var_name, dest)
+			type (BMI_model), intent (in) :: self
+			character (len=*), intent (in) :: var_name
+			real*8, pointer, intent (inout) :: dest(:)
+			integer :: n_elements
+
+			select case (var_name)
+			case ('soil__temperatures  ')
+			   n_elements = self%n_site*self%n_grd
+			   !write(*,*)self%temp
+			   write(*,*)'n:',n_elements
+			   write(*,*)self%n_site,self%n_grd
+			   call allocate_flattened_array(dest, n_elements)
+			   write(*,*)'ok'
+			   dest = reshape(self%temp, (/n_elements/))
+			   !write(*,*)
+			case default
+			   n_elements = 1
+			   call allocate_flattened_array(dest, n_elements)
+			   dest = -1.0
+			end select
+		  end subroutine BMI_get_value
+		  
+		    ! A helper routine to allocate a flattened array.
+		  subroutine allocate_flattened_array(array, n)
+			real*8, pointer, intent (inout) :: array(:)
+			integer, intent (in) :: n	
+
+			if (.not.associated(array)) then
+			   allocate(array(n))
+			else 
+			  write(*,*) 'array is already allocated'
+			  allocate(array(n))
+			end if
+		  end subroutine allocate_flattened_array
+
+		  ! Set a new value for a model variable.
+		  subroutine BMI_set_value(self, var_name, src)
+			type (BMI_model), intent (inout) :: self
+			character (len=*), intent (in) :: var_name
+			real*8, intent (in) :: src(:)
+			integer :: status
+
+			select case (var_name)
+			case ('soil__temperatures  ')
+			   self%temp = reshape(src, (/self%n_site, self%n_grd/))
+			   !write(*,*)self%temp
+			   status = 1
+			case default
+			   status = 0 
+			end select
+			write(*,*) status
+		  end subroutine BMI_set_value
+		  
+		    ! Set new values for a model variable at particular locations.
+		  subroutine BMI_set_value_at_indices(self, var_name, indices, src) 
+			type (BMI_model), intent (inout) :: self
+			character (len=*), intent (in) :: var_name
+			real*8, intent (in) :: src(:)
+			integer, intent (in) :: indices(:)
+			integer :: i, j, k, status
+
+			select case (var_name)
+			case ('soil__temperatures  ')
+			   do k = 1, size(indices)
+				  call convert_indices(k, indices, i, j, self%n_site)
+				  self%temp(j,i) = src(k)
+			   end do
+			   status = 1
+			case default
+			   status = 0
+			end select
+		  end subroutine BMI_set_value_at_indices
+		  
+		    ! A helper for converting flattened to dimensional indices.
+		  subroutine convert_indices(k, indices, i, j, ny)
+			integer :: i, j, k, indices(:), ny
+
+			j = mod((indices(k)-1), ny) + 1
+			i = (indices(k)-1)/ny + 1
+		  end subroutine convert_indices
+
 
       end module
 
