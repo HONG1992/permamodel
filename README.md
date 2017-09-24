@@ -63,3 +63,26 @@ and run it with:
 By default, this will install a Python 2.7 environment and the permamodel
 suite to the subdirectory ./pm\_env (or a different subdirectory, if specified
 as a command line argument to install\_pm.sh).
+
+
+# bmi-gipl_v0.1
+The Fortran bindings for the Basic Modeling Interface of the GIPL model.
+bmi\bmi_impl.f90 contains all required subroutines. 
+All input files are in examples folder. The gipl_cfg.cfg contains an information about input files location and parameters setup.
+
+How to build an executables.
+-----
+To build the BMI Fortran-bindings and tests:
+
+    $ mkdir _build && cd _build
+    $ cmake ../ 
+    $ make
+
+Run all tests with:
+
+    $ make test
+
+Run an individual test file:
+    
+    $cd testing
+    $./irf_test
