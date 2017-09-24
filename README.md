@@ -52,13 +52,13 @@ Installation
 The suite of permamodel routines as well as some useful ancillary packages 
 can be installed using the bash script:
 
-   permamodel/permamodel/examples/install\_pm.sh
+   $ permamodel/permamodel/examples/install\_pm.sh
 
 If this file is downloaded to your system, you can change it to executable
 and run it with:
 
-   chmod +x ./install\_pm.sh
-	 ./install\_pm.sh
+   $ chmod +x ./install\_pm.sh
+   $ ./install\_pm.sh
 
 By default, this will install a Python 2.7 environment and the permamodel
 suite to the subdirectory ./pm\_env (or a different subdirectory, if specified
@@ -70,7 +70,7 @@ The Fortran bindings for the Basic Modeling Interface of the GIPL model.
 bmi\bmi_impl.f90 contains all required subroutines. 
 All input files are in examples folder. The gipl_cfg.cfg contains an information about input files location and parameters setup.
 
-How to build an executables.
+How to build executables for GIPL model.
 -----
 To build the BMI Fortran-bindings and tests:
 
@@ -84,5 +84,5 @@ Run all tests with:
 
 Run an individual test file:
     
-    $cd testing
-    $./irf_test
+    $ cd testing
+    $ ./irf_test
